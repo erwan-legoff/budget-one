@@ -25,12 +25,11 @@ describe('SpreadsheetService', () => {
 
     expect(result.errors).toEqual([]);
     expect(importedFile).toBeDefined();
-    expect(importedFile?.type).toBe('csv');
     expect(typeof importedFile?.sheetName).toBe('string');
-    expect(importedFile?.headers).toEqual(['name', 'amount']);
     expect(importedFile?.rows).toEqual([
-      { name: 'Alice', amount: '42' },
-      { name: 'Bob', amount: '18' },
+      ['name', 'amount'],
+      ['Alice', '42'],
+      ['Bob', '18'],
     ]);
   });
 
@@ -50,10 +49,11 @@ describe('SpreadsheetService', () => {
     expect(result.errors).toEqual([]);
     expect(result.valid).toEqual([
       {
-        type: 'xlsx',
         sheetName: 'Clients',
-        headers: ['name', 'amount'],
-        rows: [{ name: 'Alice', amount: 42 }],
+        rows: [
+          ['name', 'amount'],
+          ['Alice', 42],
+        ],
       },
     ]);
   });

@@ -1,25 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import {
-  Workbook,
-  CellValue,
   CellFormulaValue,
   CellHyperlinkValue,
   CellRichTextValue,
   CellSharedFormulaValue,
+  CellValue,
   RichText,
+  Workbook,
 } from 'exceljs';
 import { ImportResult } from './dto/import-result.dto';
 import type {
+  Spreadsheet,
   SpreadsheetCell,
-  SpreadsheetFile,
-  SpreadsheetFileType,
   SpreadsheetRow,
 } from './spreadsheet.interface';
 import type { ISpreadsheetService } from './spreadsheet.service.interface';
 
 @Injectable()
-export class SpreadsheetService implements ISpreadsheetService<SpreadsheetFile> {
-  async import(buffer: Buffer): Promise<ImportResult<SpreadsheetFile>> {
+export class SpreadsheetService implements ISpreadsheetService<Spreadsheet> {
+  async import(buffer: Buffer): Promise<ImportResult<Spreadsheet>> {
     const type = this.detectFileType(buffer);
 
     if (type === 'xlsx') {
@@ -29,8 +28,8 @@ export class SpreadsheetService implements ISpreadsheetService<SpreadsheetFile> 
     return this.importCsv(buffer);
   }
 
-  async export(data: SpreadsheetFile[]): Promise<Buffer> {
-    const file: SpreadsheetFile | undefined = data[0];
+  async export(data: Spreadsheet[]): Promise<Buffer> {
+    const file: Spreadsheet | undefined = data[0];
 
     if (!file) {
       return Buffer.from('');
@@ -39,19 +38,15 @@ export class SpreadsheetService implements ISpreadsheetService<SpreadsheetFile> 
     const workbook = new Workbook();
     const worksheet = workbook.addWorksheet(file.sheetName || 'Sheet1');
 
-    worksheet.addRow(file.headers);
-
     for (const row of file.rows) {
-      worksheet.addRow(file.headers.map((header) => row[header] ?? null));
+      worksheet.addRow(row);
     }
 
     const buffer = await workbook.csv.writeBuffer();
     return Buffer.from(buffer);
   }
 
-  private async importXlsx(
-    buffer: Buffer,
-  ): Promise<ImportResult<SpreadsheetFile>> {
+  private async importXlsx(buffer: Buffer): Promise<ImportResult<Spreadsheet>> {
     const workbook = new Workbook();
     await workbook.xlsx.load(
       buffer as unknown as Parameters<Workbook['xlsx']['load']>[0],
@@ -75,7 +70,6 @@ export class SpreadsheetService implements ISpreadsheetService<SpreadsheetFile> 
     return {
       valid: [
         {
-          type: 'xlsx',
           sheetName: worksheet.name,
           ...this.extractWorksheetContent(worksheet),
         },
@@ -84,21 +78,15 @@ export class SpreadsheetService implements ISpreadsheetService<SpreadsheetFile> 
     };
   }
 
-  private importCsv(buffer: Buffer): Promise<ImportResult<SpreadsheetFile>> {
-    const [headerRow = [], ...dataRows] = this.parseCsv(
-      buffer.toString('utf-8'),
+  private importCsv(buffer: Buffer): Promise<ImportResult<Spreadsheet>> {
+    const rows = this.parseCsv(buffer.toString('utf-8')).filter((row) =>
+      row.some((cell) => cell !== null && cell !== ''),
     );
-    const headers = this.buildHeaders(headerRow);
-    const rows = dataRows
-      .filter((row) => row.some((cell) => cell !== null && cell !== ''))
-      .map((row) => this.mapRowToObject(headers, row));
 
     return Promise.resolve({
       valid: [
         {
-          type: 'csv',
           sheetName: 'Sheet1',
-          headers,
           rows,
         },
       ],
@@ -106,29 +94,28 @@ export class SpreadsheetService implements ISpreadsheetService<SpreadsheetFile> 
     });
   }
 
-  private detectFileType(buffer: Buffer): SpreadsheetFileType {
+  private detectFileType(buffer: Buffer): 'csv' | 'xlsx' {
     const isXlsx = buffer.subarray(0, 2).equals(Buffer.from('PK'));
 
     return isXlsx ? 'xlsx' : 'csv';
   }
 
   private extractWorksheetContent(worksheet: WorksheetLike): {
-    headers: string[];
     rows: SpreadsheetRow[];
   } {
-    const headerRow = this.getRowValues(worksheet, 1);
-    const headers = this.buildHeaders(headerRow);
     const rows: SpreadsheetRow[] = [];
 
-    for (let rowIndex = 2; rowIndex <= worksheet.rowCount; rowIndex += 1) {
-      const row = this.getRowValues(worksheet, rowIndex);
+    for (let rowIndex = 1; rowIndex <= worksheet.rowCount; rowIndex += 1) {
+      const row = this.getRowValues(worksheet, rowIndex).map((cell) =>
+        this.normalizeCellValue(cell),
+      );
 
-      if (row.some((cell) => this.normalizeCellValue(cell) !== null)) {
-        rows.push(this.mapRowToObject(headers, row));
+      if (row.some((cell) => cell !== null)) {
+        rows.push(row);
       }
     }
 
-    return { headers, rows };
+    return { rows };
   }
 
   private getRowValues(
@@ -140,25 +127,6 @@ export class SpreadsheetService implements ISpreadsheetService<SpreadsheetFile> 
       ? row.values
       : Object.values(row.values);
     return values.slice(1);
-  }
-
-  private buildHeaders(row: Array<CellValue | undefined>): string[] {
-    return row.map((cell, index) => {
-      const value = this.normalizeCellValue(cell);
-      return value === null || value === ''
-        ? `column_${index + 1}`
-        : String(value).trim();
-    });
-  }
-
-  private mapRowToObject(
-    headers: string[],
-    row: Array<CellValue | undefined>,
-  ): SpreadsheetRow {
-    return headers.reduce<SpreadsheetRow>((accumulator, header, index) => {
-      accumulator[header] = this.normalizeCellValue(row[index]);
-      return accumulator;
-    }, {});
   }
 
   private parseCsv(content: string): string[][] {
