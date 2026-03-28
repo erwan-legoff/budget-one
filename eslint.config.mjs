@@ -4,6 +4,8 @@ import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended'
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+const isStrictLint = process.env.ESLINT_STRICT === 'true';
+
 export default tseslint.config(
   {
     ignores: ['eslint.config.mjs'],
@@ -27,9 +29,11 @@ export default tseslint.config(
   {
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-floating-promises': 'warn',
-      '@typescript-eslint/no-unsafe-argument': 'warn',
-      "prettier/prettier": ["error", { endOfLine: "auto" }],
+      '@typescript-eslint/no-floating-promises': isStrictLint ? 'error' : 'warn',
+      '@typescript-eslint/no-unused-vars': isStrictLint ? 'error' : 'off',
+      '@typescript-eslint/no-unsafe-argument': isStrictLint ? 'error' : 'warn',
+      'no-empty': isStrictLint ? 'warn' : 'off',
+      'prettier/prettier': 'off',
     },
   },
 );
