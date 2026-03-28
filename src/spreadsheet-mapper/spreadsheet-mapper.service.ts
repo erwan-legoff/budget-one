@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { isValid, parse, parseISO } from 'date-fns';
 import { Budget } from 'src/budget/entities/budget';
 import {
   BudgetSpreadsheet,
@@ -70,12 +71,34 @@ export class SpreadsheetMapperService implements ISpreadsheetMapperService {
         budgetRow[header] = currentCell;
         break;
       case 'date':
-        if (!(currentCell instanceof Date)) {
-          throw new Error(`${header} must be a Date`);
-        }
-        budgetRow[header] = currentCell;
+        budgetRow[header] = this.parseDateCell(currentCell, header);
         break;
     }
+  }
+
+  private parseDateCell(
+    currentCell: string | number | boolean | Date,
+    header: string,
+  ): Date {
+    if (currentCell instanceof Date) {
+      return currentCell;
+    }
+
+    if (typeof currentCell !== 'string') {
+      throw new Error(`${header} must be a Date`);
+    }
+
+    const parsedIso = parseISO(currentCell);
+    if (isValid(parsedIso)) {
+      return parsedIso;
+    }
+
+    const parsedCustom = parse(currentCell, 'dd/MM/yyyy', new Date());
+    if (isValid(parsedCustom)) {
+      return parsedCustom;
+    }
+
+    throw new Error(`${header} must be a Date`);
   }
 
   private extractIndexMapping(
