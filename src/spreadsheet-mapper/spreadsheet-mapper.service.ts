@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { isValid, parse, parseISO } from 'date-fns';
-import { Budget } from 'src/budget/entities/budget';
 import {
   BudgetSpreadsheet,
   BudgetSpreadsheetRow,
@@ -16,62 +15,79 @@ import {
 
 @Injectable()
 export class SpreadsheetMapperService implements ISpreadsheetMapperService {
+  /**
+   * Used to map the spreadsheet into a usable normalized budget object
+   * @param spreadSheet the data we want to import
+   * @param headerMapping the label used in the doc map to the corresponding budget value
+   * @returns a normalized Budget object
+   */
   import(
     spreadSheet: Spreadsheet,
     headerMapping: Map<string, BudgetEnum>,
   ): BudgetSpreadsheet {
     const rows = spreadSheet.rows;
-    const headersIndex = this.findHeadersIndex(rows, [...headerMapping.keys()]);
+    const headersIndex = this.findHeadersRowNumber(rows, [
+      ...headerMapping.keys(),
+    ]);
 
-    if (isNaN(headersIndex)) {
+    // Can't do anything if no headers are found
+    if (!Number.isFinite(headersIndex)) {
       console.error('No Headers found');
       throw new Error('No Headers found');
     }
-    const trimedRows = rows.slice(headersIndex, rows.length - 1);
-    const extractedHeaders = trimedRows[0].map(
+
+    const extractedHeaders = rows[headersIndex].map(
       (cell) => cell?.toString() || '',
     );
-    const headersIndexMapping = this.extractIndexMapping(
+    const headersIndexMapping = this.extractHeaderToIndexMapping(
       headerMapping,
       extractedHeaders,
     );
-    const dataRows = rows.slice(1, rows.length - 1);
+    const dataRows = rows.slice(headersIndex + 1);
     const budgetRows: BudgetSpreadsheetRow[] = [];
     for (const dataRow of dataRows) {
       const budgetRow: Partial<BudgetSpreadsheetRow> = {};
       for (const header of headersIndexMapping.keys()) {
+        // ignore undefined header
         const index = headersIndexMapping.get(header);
-        if (index == null) throw new Error(`${header} not found`);
+        if (index == null) continue;
+        // ignore null value
         const currentCell = dataRow[index];
         if (currentCell == null) continue;
+
         this.mapDataToField(header, currentCell, budgetRow);
       }
       budgetRows.push(budgetRow as BudgetSpreadsheetRow);
     }
     return { rows: budgetRows };
   }
-
+  /**
+   * This is the central mapping method : it will map the cell to its budget param we work on and verify the value is ok
+   * @param header the haders that tell us wgere to put the data
+   * @param currentCell the data we want to map
+   * @param budgetTargetRow the row where we want to store the data
+   */
   private mapDataToField(
-    header: string,
+    header: BudgetEnum,
     currentCell: string | number | boolean | Date,
-    budgetRow: Partial<BudgetSpreadsheetRow>,
+    budgetTargetRow: Partial<BudgetSpreadsheetRow>,
   ) {
     switch (header) {
       case 'label':
         if (typeof currentCell !== 'string') {
           throw new Error(`${header} must be a string`);
         }
-        budgetRow[header] = currentCell;
+        budgetTargetRow[header] = currentCell;
         break;
       case 'debit':
       case 'credit':
         if (typeof currentCell !== 'number') {
           throw new Error(`${header} must be a number`);
         }
-        budgetRow[header] = currentCell;
+        budgetTargetRow[header] = currentCell;
         break;
       case 'date':
-        budgetRow[header] = this.parseDateCell(currentCell, header);
+        budgetTargetRow[header] = this.parseDateCell(currentCell, header);
         break;
     }
   }
@@ -100,33 +116,63 @@ export class SpreadsheetMapperService implements ISpreadsheetMapperService {
 
     throw new Error(`${header} must be a Date`);
   }
-
-  private extractIndexMapping(
-    headerMapping: Map<string, keyof Budget>,
+  /**
+   * Used to know the corresponding index for each header to do mapping header -> index
+   *
+   * @param headerMapping the mapping between doc label and their corresponding budget value
+   * @param extractedHeaders the headers line we found
+   * @returns the index of each budget value
+   */
+  private extractHeaderToIndexMapping(
+    headerMapping: Map<string, BudgetEnum>,
     extractedHeaders: string[],
-  ): Map<keyof Budget, number> {
-    const headersIndexMapping: Map<keyof Budget, number> = new Map();
-    for (const key of headerMapping.keys()) {
-      const index = extractedHeaders.findIndex((header) => header == key);
-      const currentEnum = headerMapping.get(key);
-      if (!currentEnum) throw new Error('Uncompatibl header detected');
-      headersIndexMapping.set(currentEnum, index);
-    }
-    return headersIndexMapping;
-  }
+  ): Map<BudgetEnum, number> {
+    const headerToIndexMapping: Map<BudgetEnum, number> = new Map();
 
-  private findHeadersIndex(rows: SpreadsheetRow[], headers: string[]) {
+    for (const headerKey of headerMapping.keys()) {
+      // the key must exists in the current header
+      const headerIndex = extractedHeaders.findIndex(
+        (header) => header === headerKey,
+      );
+      if (headerIndex === -1) throw new Error(`${headerKey} header not found`);
+      // the key must have an associated header enum
+      const currentHeaderEnum = headerMapping.get(headerKey);
+      if (!currentHeaderEnum) throw new Error('Uncompatible header detected');
+
+      headerToIndexMapping.set(currentHeaderEnum, headerIndex);
+    }
+    return headerToIndexMapping;
+  }
+  /**
+   * Used to find the line where we have all headers
+   *
+   * Travel the whole rows until it founds a header row and return it
+   * @param rows the rows of our sheet
+   * @param headers the headers used for reference
+   * @returns the row number where we detect headers
+   */
+  private findHeadersRowNumber(
+    rows: SpreadsheetRow[],
+    headers: string[],
+  ): number {
     let rowIndex = 0;
     let headersIndex = Infinity;
-    while (isNaN(headersIndex) && rowIndex < headers.length - 1) {
-      if (headers.includes(rows[rowIndex][0]?.toString() || '')) {
+
+    while (!Number.isFinite(headersIndex) && rowIndex < rows.length) {
+      const oneHeaderValueFoundInCurrentLine = headers.includes(
+        rows[rowIndex][0]?.toString() || '',
+      );
+
+      if (oneHeaderValueFoundInCurrentLine) {
+        // We convert to string for simplicity
         const potentialHeaders = rows[rowIndex].map(
           (cell) => cell?.toString() || '',
         );
+        // We filter only header values to check if there's all data
         const filteredHeaders = potentialHeaders.filter((header) =>
           headers.includes(header),
         );
-        if ((filteredHeaders.length = headers.length)) {
+        if (filteredHeaders.length === headers.length) {
           headersIndex = rowIndex;
         }
       }
